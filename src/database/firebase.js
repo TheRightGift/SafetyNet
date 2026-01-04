@@ -19,7 +19,6 @@ export const seedUsers = async () => {
     // 1. Seed Guardian
     await setDoc(doc(db, "users", "guardian_123"), {
       uid: "guardian_123",
-      email: "parent@test.com",
       role: "guardian",
       dependentId: "child_456"
     });
@@ -27,11 +26,11 @@ export const seedUsers = async () => {
     // 2. Seed Dependent
     await setDoc(doc(db, "users", "child_456"), {
       uid: "child_456",
-      email: "child@test.com",
       role: "dependent",
       guardianId: "guardian_123",
-      lastPing: serverTimestamp(),
-      status: "safe"
+      status: "pending", 
+      checkInDeadline: "20:00", // Default 8:00 PM
+      lastPing: serverTimestamp()
     });
     console.log("Database Seeded Successfully");
   } catch (e) {
