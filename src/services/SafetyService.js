@@ -1,92 +1,89 @@
 import { db } from '../database/firebase';
 import { 
-  doc, 
-  updateDoc, 
-  collection, 
-  addDoc, 
-  serverTimestamp, 
-  onSnapshot, 
-  query, 
-  orderBy, 
-  getDocs 
+  doc, updateDoc, collection, addDoc, 
+  serverTimestamp, query, orderBy, getDocs, getDoc 
 } from "firebase/firestore";
+import * as Location from 'expo-location';
+import { getDistance } from 'geolib';
+import { sendPushNotification } from './NotificationService';
 
 /**
- * DEPENDENT LOGIC
+ * Sets a destination and resets the arrived status.
  */
-
-// 1. Update the status to 'safe' and refresh the timestamp
-export const sendSafePing = async (userId) => {
+export const setDestination = async (userId, coords, name) => {
   try {
     const userRef = doc(db, "users", userId);
     await updateDoc(userRef, {
-      status: "safe",
-      lastPing: serverTimestamp()
-    });
-    console.log("Ping successful for user:", userId);
-  } catch (error) {
-    console.error("Error in sendSafePing:", error);
-    throw error;
-  }
-};
-
-// 2. Upload a location coordinate to the cloud (called by Background Task)
-export const uploadLocationBreadcrumb = async (lat, lon) => {
-  try {
-    const dependentId = "child_456"; // Use auth UID in production
-    const logsRef = collection(db, "users", dependentId, "location_logs");
-    await addDoc(logsRef, {
-      latitude: lat,
-      longitude: lon,
-      timestamp: serverTimestamp()
+      destination: {
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        name: name,
+        arrived: false
+      }
     });
   } catch (error) {
-    console.error("Error uploading breadcrumb:", error);
+    console.error("Error setting destination:", error);
   }
 };
 
 /**
- * GUARDIAN LOGIC
+ * Checks if current location is within 200m of destination.
+ * Triggered by the background task.
  */
+export const checkArrival = async (currentCoords, userData) => {
+  if (!userData?.destination || userData.destination.arrived) return;
 
-// 3. Set the daily check-in deadline (format "HH:mm")
-export const setDeadline = async (timeString) => {
-  try {
-    const userRef = doc(db, "users", "child_456");
-    await updateDoc(userRef, { 
-      checkInDeadline: timeString,
-      status: "pending" // Reset to pending so the deadline can be tracked
-    });
-  } catch (error) {
-    console.error("Error setting deadline:", error);
-    throw error;
-  }
-};
+  const distance = getDistance(
+    { latitude: currentCoords.latitude, longitude: currentCoords.longitude },
+    { latitude: userData.destination.latitude, longitude: userData.destination.longitude }
+  );
 
-// 4. Listen to the Dependent's document in real-time
-export const subscribeToDependent = (dependentId, onUpdate) => {
-  const docRef = doc(db, "users", dependentId);
-  return onSnapshot(docRef, (doc) => {
-    if (doc.exists()) {
-      onUpdate(doc.data());
+  if (distance < 200) { 
+    const userRef = doc(db, "users", userData.uid);
+    await updateDoc(userRef, { "destination.arrived": true });
+
+    if (userData.linkedId) {
+      const guardianSnap = await getDoc(doc(db, "users", userData.linkedId));
+      const token = guardianSnap.data()?.pushToken;
+      if (token) {
+        await sendPushNotification(token, "✅ Arrival Confirmed", `${userData.email} has arrived at ${userData.destination.name}`);
+      }
     }
-  }, (error) => {
-    console.error("Subscription error:", error);
-  });
+  }
 };
 
-// 5. Fetch all location logs for the dependent (used if they miss the deadline)
-export const fetchMissedLogs = async () => {
-  try {
-    const logsRef = collection(db, "users", "child_456", "location_logs");
-    const q = query(logsRef, orderBy("timestamp", "desc"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({ 
-      id: doc.id, 
-      ...doc.data() 
-    }));
-  } catch (error) {
-    console.error("Error fetching logs:", error);
-    return [];
+export const triggerPanicMode = async (userId) => {
+  const userRef = doc(db, "users", userId);
+  const userSnap = await getDoc(userRef);
+  const userData = userSnap.data();
+
+  const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+  await updateDoc(userRef, { status: "sos", panicTimestamp: serverTimestamp() });
+  await uploadLocationBreadcrumb(location.coords.latitude, location.coords.longitude, userId);
+
+  if (userData.linkedId) {
+    const gSnap = await getDoc(doc(db, "users", userData.linkedId));
+    const token = gSnap.data()?.pushToken;
+    if (token) await sendPushNotification(token, "🚨 SOS ALERT", "Dependent triggered Panic Button!");
   }
+};
+
+export const sendSafePing = async (userId) => {
+  const userRef = doc(db, "users", userId);
+  const userSnap = await getDoc(userRef);
+  const data = userSnap.data();
+  const nextDeadline = Date.now() + (data.checkInDuration || 1) * 3600000;
+  await updateDoc(userRef, { status: "safe", nextCheckInDeadline: nextDeadline });
+};
+
+export const uploadLocationBreadcrumb = async (lat, lon, userId) => {
+  const logsRef = collection(db, "users", userId, "location_logs");
+  await addDoc(logsRef, { latitude: lat, longitude: lon, timestamp: serverTimestamp() });
+};
+
+export const fetchMissedLogs = async (userId) => {
+  const logsRef = collection(db, "users", userId, "location_logs");
+  const q = query(logsRef, orderBy("timestamp", "desc"));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 };

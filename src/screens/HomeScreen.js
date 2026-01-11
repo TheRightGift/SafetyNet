@@ -1,58 +1,95 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  View, 
-  Text, 
-  TouchableOpacity, 
-  StyleSheet, 
-  FlatList, 
-  Alert, 
-  ActivityIndicator 
+  View, Text, TouchableOpacity, StyleSheet, 
+  ActivityIndicator, SafeAreaView, ScrollView 
 } from 'react-native';
+import * as Location from 'expo-location';
 import { db } from '../database/firebase';
 import { doc, onSnapshot } from "firebase/firestore";
-// Import the functions with curly braces to avoid "undefined" errors
+import { auth } from '../database/firebase';
 import { 
-  setDeadline, 
-  fetchMissedLogs, 
-  sendSafePing 
+  setCheckInDuration, 
+  sendSafePing, 
+  fetchMissedLogs 
 } from '../services/SafetyService';
+import { requestFullLocationPermissions } from '../utils/PermissionHelper';
+import { LOCATION_TASK_NAME } from '../services/LocationTask';
+import HistoryMap from '../components/HistoryMap';
 
 export default function HomeScreen() {
-  const [role, setRole] = useState('dependent'); // Mock role state
+  const [role, setRole] = useState('dependent'); 
+  const [hasPermissions, setHasPermissions] = useState(false);
   const [dependentData, setDependentData] = useState(null);
   const [missedLogs, setMissedLogs] = useState([]);
   const [isOverdue, setIsOverdue] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [timeLeft, setTimeLeft] = useState('--:--:--');
 
-  const DEPENDENT_ID = "child_456"; // Using the seeded ID
+  const DEPENDENT_ID = "child_456";
 
   useEffect(() => {
-    // Real-time listener for the Dependent's document
+    checkInitialPermissions();
+    
     const unsub = onSnapshot(doc(db, "users", DEPENDENT_ID), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         setDependentData(data);
-        checkDeadline(data);
+        handleStatusLogic(data);
       }
       setLoading(false);
     });
-
     return () => unsub();
   }, []);
 
-  const checkDeadline = async (data) => {
-    if (!data?.checkInDeadline || data.status === 'safe') {
-      setIsOverdue(false);
-      return;
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (dependentData?.nextCheckInDeadline) {
+        const now = Date.now();
+        const diff = dependentData.nextCheckInDeadline - now;
+        if (diff <= 0) {
+          setTimeLeft("OVERDUE");
+        } else {
+          const h = Math.floor(diff / 3600000);
+          const m = Math.floor((diff % 3600000) / 60000);
+          const s = Math.floor((diff % 60000) / 1000);
+          setTimeLeft(`${h}h ${m}m ${s}s`);
+        }
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [dependentData?.nextCheckInDeadline]);
+
+  const checkInitialPermissions = async () => {
+    const { status } = await Location.getBackgroundPermissionsAsync();
+    if (status === 'granted') {
+      setHasPermissions(true);
+      startTracking();
+    } else {
+      setLoading(false);
     }
+  };
 
-    // Logic to compare current time with the "HH:mm" string
-    const [hrs, mins] = data.checkInDeadline.split(':');
-    const now = new Date();
-    const deadline = new Date();
-    deadline.setHours(parseInt(hrs), parseInt(mins), 0);
+  const handleEnablePermissions = async () => {
+    const granted = await requestFullLocationPermissions();
+    if (granted) {
+      setHasPermissions(true);
+      startTracking();
+    }
+  };
 
-    if (now > deadline) {
+  const startTracking = async () => {
+    const started = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
+    if (!started) {
+      await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
+        accuracy: Location.Accuracy.High,
+        timeInterval: 60000,
+        foregroundService: { notificationTitle: "SafetyNet", notificationBody: "Tracking Active" }
+      });
+    }
+  };
+
+  const handleStatusLogic = async (data) => {
+    if (Date.now() > data.nextCheckInDeadline && data.status !== 'safe') {
       setIsOverdue(true);
       const logs = await fetchMissedLogs();
       setMissedLogs(logs);
@@ -61,126 +98,108 @@ export default function HomeScreen() {
     }
   };
 
-  const handlePingPress = async () => {
-    try {
-      await sendSafePing(DEPENDENT_ID);
-      Alert.alert("Status Updated", "Guardian has been notified that you are safe.");
-    } catch (err) {
-      Alert.alert("Ping Failed", err.message);
-    }
-  };
+  // REUSABLE UI: Duration Selector
+  const DurationSelector = ({ title }) => (
+  <View style={styles.selectorCard}>
+    <Text style={styles.selectorTitle}>{title}</Text>
+    <View style={styles.grid}>
+      {[1, 2, 6, 12].map(hr => (
+        <TouchableOpacity 
+          key={hr} 
+          style={styles.gridBtn} 
+          // Pass BOTH the hours and the DEPENDENT_ID here
+          onPress={() => setCheckInDuration(hr, DEPENDENT_ID)} 
+        >
+          <Text style={styles.gridBtnText}>{hr}hr</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  </View>
+);
 
-  if (loading) {
+  if (loading) return <ActivityIndicator style={{flex:1}} size="large" />;
+
+  if (!hasPermissions) {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#4CAF50" />
+      <View style={styles.centered}>
+        <Text style={styles.header}>Permissions Required</Text>
+        <TouchableOpacity style={styles.primaryBtn} onPress={handleEnablePermissions}>
+          <Text style={styles.btnText}>Enable Always Location</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      {/* Role Switcher */}
+    <SafeAreaView style={styles.container}>
       <View style={styles.tabBar}>
-        <TouchableOpacity 
-          style={[styles.tab, role === 'dependent' && styles.activeTab]} 
-          onPress={() => setRole('dependent')}
-        >
-          <Text style={role === 'dependent' ? styles.activeTabText : styles.tabText}>Dependent</Text>
+        <TouchableOpacity onPress={() => setRole('dependent')} style={[styles.tab, role==='dependent' && styles.activeTab]}>
+          <Text>Dependent</Text>
         </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.tab, role === 'guardian' && styles.activeTab]} 
-          onPress={() => setRole('guardian')}
-        >
-          <Text style={role === 'guardian' ? styles.activeTabText : styles.tabText}>Guardian</Text>
+        <TouchableOpacity onPress={() => setRole('guardian')} style={[styles.tab, role==='guardian' && styles.activeTab]}>
+          <Text>Guardian</Text>
         </TouchableOpacity>
       </View>
 
-      {role === 'dependent' ? (
-        <View style={styles.viewContent}>
-          <Text style={styles.header}>Safety Status</Text>
-          <Text style={styles.subHeader}>Deadline: {dependentData?.checkInDeadline || "Not Set"}</Text>
-          
-          <TouchableOpacity 
-            style={[styles.pingBtn, { backgroundColor: dependentData?.status === 'safe' ? '#4CAF50' : '#FF9800' }]} 
-            onPress={handlePingPress}
-          >
-            <Text style={styles.pingBtnText}>
-              {dependentData?.status === 'safe' ? 'I AM SAFE' : 'SEND PING'}
-            </Text>
-          </TouchableOpacity>
-          
-          <Text style={styles.statusInfo}>
-            Status: {dependentData?.status?.toUpperCase()}
-          </Text>
-        </View>
-      ) : (
-        <View style={styles.viewContent}>
-          <Text style={styles.header}>Guardian Monitor</Text>
-          
-          <View style={styles.deadlineActions}>
-            <TouchableOpacity style={styles.smallBtn} onPress={() => setDeadline("18:00")}>
-              <Text>Set 6:00 PM</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.smallBtn} onPress={() => setDeadline("21:00")}>
-              <Text>Set 9:00 PM</Text>
-            </TouchableOpacity>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        {role === 'dependent' ? (
+          <View style={styles.viewBody}>
+            {!dependentData?.checkInDuration ? (
+              <DurationSelector title="Set your safety interval to begin" />
+            ) : (
+              <>
+                <Text style={styles.label}>Next Check-in In:</Text>
+                <Text style={[styles.timer, timeLeft === 'OVERDUE' && {color: 'red'}]}>{timeLeft}</Text>
+                <TouchableOpacity style={styles.pingBtn} onPress={() => sendSafePing(DEPENDENT_ID)}>
+                  <Text style={styles.pingText}>I AM SAFE</Text>
+                </TouchableOpacity>
+                <Text style={styles.footerInfo}>Frequency: every {dependentData.checkInDuration}h</Text>
+              </>
+            )}
           </View>
-
-          {isOverdue ? (
-            <View style={styles.alertArea}>
-              <Text style={styles.errorText}>⚠️ CHECK-IN MISSED</Text>
-              <Text style={styles.alertSubText}>Showing path history:</Text>
-              <FlatList
-                data={missedLogs}
-                keyExtractor={(item) => item.id}
-                renderItem={({ item }) => (
-                  <View style={styles.logItem}>
-                    <Text style={styles.logCoords}>📍 {item.latitude.toFixed(5)}, {item.longitude.toFixed(5)}</Text>
-                    <Text style={styles.logTime}>{item.timestamp?.toDate().toLocaleTimeString()}</Text>
-                  </View>
-                )}
-              />
-            </View>
-          ) : (
-            <View style={styles.safeCard}>
-              <Text style={styles.safeText}>
-                {dependentData?.status === 'safe' ? '✅ Dependent is Safe' : '⏳ Waiting for check-in...'}
-              </Text>
-            </View>
-          )}
-        </View>
-      )}
-    </View>
+        ) : (
+          <View style={styles.viewBody}>
+            <DurationSelector title="Change Tracking Interval" />
+            {isOverdue ? (
+              <View style={styles.alertBox}>
+                <Text style={styles.alertHeader}>⚠️ MISSED CHECK-IN</Text>
+                <HistoryMap logs={missedLogs} />
+              </View>
+            ) : (
+              <View style={styles.safeCard}>
+                <Text style={styles.safeText}>
+                  Status: {dependentData?.status === 'safe' ? "✅ Safe" : "⏳ Monitoring"}
+                </Text>
+              </View>
+            )}
+          </View>
+        )}
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F7FA', paddingTop: 50 },
-  centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  tabBar: { flexDirection: 'row', paddingHorizontal: 20, marginBottom: 20 },
-  tab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: '#ddd' },
-  activeTab: { borderBottomColor: '#4CAF50' },
-  tabText: { color: '#888', fontWeight: '600' },
-  activeTabText: { color: '#4CAF50', fontWeight: 'bold' },
-  viewContent: { flex: 1, alignItems: 'center', paddingHorizontal: 20 },
-  header: { fontSize: 24, fontWeight: 'bold', color: '#333' },
-  subHeader: { fontSize: 16, color: '#666', marginBottom: 30 },
-  pingBtn: { 
-    width: 220, height: 220, borderRadius: 110, 
-    justifyContent: 'center', alignItems: 'center', 
-    elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3 
-  },
-  pingBtnText: { color: 'white', fontSize: 22, fontWeight: 'bold' },
-  statusInfo: { marginTop: 20, fontSize: 18, color: '#444' },
-  deadlineActions: { flexDirection: 'row', gap: 10, marginVertical: 20 },
-  smallBtn: { padding: 10, backgroundColor: '#FFF', borderRadius: 8, borderWidth: 1, borderColor: '#DDD' },
-  alertArea: { width: '100%', flex: 1, backgroundColor: '#FFEBEE', borderRadius: 15, padding: 15, marginTop: 10 },
-  errorText: { color: '#D32F2F', fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
-  alertSubText: { textAlign: 'center', color: '#666', marginBottom: 10 },
-  safeCard: { padding: 30, backgroundColor: '#E8F5E9', borderRadius: 15, width: '100%', alignItems: 'center' },
-  safeText: { fontSize: 18, color: '#2E7D32', fontWeight: '600' },
-  logItem: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#FFCDD2' },
-  logCoords: { fontSize: 14, color: '#333' },
-  logTime: { fontSize: 12, color: '#888' }
+  container: { flex: 1, backgroundColor: '#F8F9FA' },
+  tabBar: { flexDirection: 'row', backgroundColor: '#FFF', elevation: 2 },
+  tab: { flex: 1, padding: 15, alignItems: 'center' },
+  activeTab: { borderBottomWidth: 3, borderBottomColor: '#10B981' },
+  scrollContent: { padding: 20 },
+  viewBody: { alignItems: 'center' },
+  selectorCard: { backgroundColor: '#FFF', padding: 20, borderRadius: 15, width: '100%', elevation: 3, marginBottom: 20 },
+  selectorTitle: { fontSize: 18, fontWeight: 'bold', textAlign: 'center', marginBottom: 15 },
+  grid: { flexDirection: 'row', justifyContent: 'space-around' },
+  gridBtn: { backgroundColor: '#10B981', padding: 12, borderRadius: 8, minWidth: 60, alignItems: 'center' },
+  gridBtnText: { color: '#FFF', fontWeight: 'bold' },
+  timer: { fontSize: 48, fontWeight: 'bold', color: '#10B981', marginVertical: 30 },
+  pingBtn: { width: 200, height: 200, borderRadius: 100, backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center', elevation: 5 },
+  pingText: { color: '#FFF', fontSize: 24, fontWeight: 'bold' },
+  alertBox: { width: '100%', marginTop: 20 },
+  alertHeader: { color: '#DC2626', fontWeight: 'bold', fontSize: 20, textAlign: 'center', marginBottom: 10 },
+  safeCard: { backgroundColor: '#E1F5FE', padding: 30, borderRadius: 15, width: '100%', alignItems: 'center', marginTop: 20 },
+  safeText: { fontSize: 18, fontWeight: 'bold', color: '#0288D1' },
+  primaryBtn: { backgroundColor: '#2563EB', padding: 15, borderRadius: 10, width: '80%' },
+  btnText: { color: '#FFF', textAlign: 'center', fontWeight: 'bold' },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  label: { color: '#666', fontSize: 16 }
 });

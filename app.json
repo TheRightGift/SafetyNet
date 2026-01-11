@@ -31,12 +31,16 @@
         "backgroundColor": "#ffffff"
       },
       "package": "com.yourname.safetynet",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyB02BI0Hc7HWOO_VxB1bG7B3eQ2jEgZ_pE"
+        }
+      },
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
-        "FOREGROUND_SERVICE",
-        "RECEIVE_BOOT_COMPLETED"
+        "FOREGROUND_SERVICE"
       ]
     },
     "web": {
