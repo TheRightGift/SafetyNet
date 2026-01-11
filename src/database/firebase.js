@@ -1,41 +1,27 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore} from "firebase/firestore";
+import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
+import Constants from 'expo-constants';
+
+// Access variables defined in app.config.js
+const { 
+  firebaseApiKey, 
+  firebaseAuthDomain, 
+  firebaseProjectId, 
+  firebaseStorageBucket, 
+  firebaseMessagingSenderId, 
+  firebaseAppId 
+} = Constants.expoConfig.extra;
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCSJmCRutv_aR8x8R99O3F9OQZ5U7FVk8k",
-  authDomain: "safetynet-185dc.firebaseapp.com",
-  projectId: "safetynet-185dc",
-  storageBucket: "safetynet-185dc.firebasestorage.app",
-  messagingSenderId: "644292868034",
-  appId: "1:644292868034:web:7b808506f55426f55d085b",
-  measurementId: "G-LV155PJF0X"
+  apiKey: firebaseApiKey,
+  authDomain: firebaseAuthDomain,
+  projectId: firebaseProjectId,
+  storageBucket: firebaseStorageBucket,
+  messagingSenderId: firebaseMessagingSenderId,
+  appId: firebaseAppId
 };
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
-
-// export const seedUsers = async () => {
-//   try {
-//     // 1. Seed Guardian
-//     await setDoc(doc(db, "users", "guardian_123"), {
-//       uid: "guardian_123",
-//       role: "guardian",
-//       dependentId: "child_456"
-//     });
-
-//     // 2. Seed Dependent
-//     await setDoc(doc(db, "users", "child_456"), {
-//       uid: "child_456",
-//       role: "dependent",
-//       guardianId: "guardian_123",
-//       status: "pending", 
-//       checkInDeadline: "20:00", // Default 8:00 PM
-//       lastPing: serverTimestamp()
-//     });
-//     console.log("Database Seeded Successfully");
-//   } catch (e) {
-//     console.error("Seeding Error: ", e);
-//   }
-// };
