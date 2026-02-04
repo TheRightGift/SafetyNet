@@ -19,6 +19,7 @@ import { sendSafePing, triggerPanicMode, setDestination } from '../services/Safe
 import { logoutUser } from '../services/AuthService';
 import DestinationPicker from '../components/DestinationPicker';
 import { LoadingOverlay } from '../components/LoadingOverlay';
+import { startBackgroundLocation, stopBackgroundLocation } from '../services/BackgroundLocationService';
 
 export default function DependentHomeScreen() {
   const [userData, setUserData] = useState(null);
@@ -26,6 +27,7 @@ export default function DependentHomeScreen() {
   const [isHolding, setIsHolding] = useState(false);
   const [pickerVisible, setPickerVisible] = useState(false);
   const [isActionLoading, setIsActionLoading] = useState(false);
+  const [bgStatus, setBgStatus] = useState('starting'); // starting | on | off | denied
   
   const userId = auth.currentUser.uid;
   const holdAnim = useRef(new Animated.Value(0)).current;
@@ -35,7 +37,19 @@ export default function DependentHomeScreen() {
     const unsub = onSnapshot(doc(db, "users", userId), (docSnap) => {
       if (docSnap.exists()) setUserData(docSnap.data());
     });
-    return () => unsub();
+
+    // Start background location for dependent
+    startBackgroundLocation()
+      .then((res) => setBgStatus(res?.started ? 'on' : res?.reason === 'permissions' ? 'denied' : 'off'))
+      .catch((err) => {
+        console.warn('Background location start failed', err);
+        setBgStatus('off');
+      });
+
+    return () => {
+      unsub();
+      stopBackgroundLocation().catch(() => {});
+    };
   }, []);
 
   // 2. Countdown Timer Logic
@@ -80,7 +94,13 @@ export default function DependentHomeScreen() {
     }).start(({ finished }) => {
       if (finished) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        triggerPanicMode(userId);
+        triggerPanicMode(userId).catch((err) => Alert.alert('SOS Error', err?.message || 'Unable to trigger SOS'));
+        // Retry background start if previously denied
+        if (bgStatus === 'denied' || bgStatus === 'off') {
+          startBackgroundLocation()
+            .then((res) => setBgStatus(res?.started ? 'on' : res?.reason === 'permissions' ? 'denied' : 'off'))
+            .catch(() => setBgStatus('off'));
+        }
       }
     });
   };
@@ -122,6 +142,17 @@ export default function DependentHomeScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollBody}>
+        {/* Background status indicator */}
+        <View style={styles.bgStatusRow}>
+          <View style={[styles.statusDot, bgStatus === 'on' ? styles.dotOn : bgStatus === 'denied' ? styles.dotDenied : styles.dotOff]} />
+          <Text style={styles.bgStatusText}>
+            {bgStatus === 'on' && 'Background location active'}
+            {bgStatus === 'denied' && 'Location permission denied - tap SOS to retry prompt'}
+            {bgStatus === 'off' && 'Background location inactive'}
+            {bgStatus === 'starting' && 'Starting background location...'}
+          </Text>
+        </View>
+
         {/* Pairing Code - Accessible and High Contrast */}
         <View style={styles.pairingCard}>
           <Text style={styles.cardTitle}>Your Pairing Code</Text>

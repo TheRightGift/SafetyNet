@@ -13,7 +13,7 @@ import {
   fetchMissedLogs 
 } from '../services/SafetyService';
 import { requestFullLocationPermissions } from '../utils/PermissionHelper';
-import { LOCATION_TASK_NAME } from '../services/LocationTask';
+import { startBackgroundLocation, stopBackgroundLocation } from '../services/BackgroundLocationService';
 import HistoryMap from '../components/HistoryMap';
 
 export default function HomeScreen() {
@@ -38,7 +38,10 @@ export default function HomeScreen() {
       }
       setLoading(false);
     });
-    return () => unsub();
+    return () => {
+      unsub();
+      stopBackgroundLocation().catch(() => {});
+    };
   }, []);
 
   useEffect(() => {
@@ -78,20 +81,16 @@ export default function HomeScreen() {
   };
 
   const startTracking = async () => {
-    const started = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
-    if (!started) {
-      await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
-        accuracy: Location.Accuracy.High,
-        timeInterval: 60000,
-        foregroundService: { notificationTitle: "SafetyNet", notificationBody: "Tracking Active" }
-      });
+    const res = await startBackgroundLocation();
+    if (!res?.started && res?.reason === 'permissions') {
+      setHasPermissions(false);
     }
   };
 
   const handleStatusLogic = async (data) => {
     if (Date.now() > data.nextCheckInDeadline && data.status !== 'safe') {
       setIsOverdue(true);
-      const logs = await fetchMissedLogs();
+      const logs = await fetchMissedLogs(DEPENDENT_ID);
       setMissedLogs(logs);
     } else {
       setIsOverdue(false);

@@ -5,6 +5,7 @@ import { auth, db } from '../database/firebase';
 import { doc, onSnapshot } from "firebase/firestore";
 import { linkDependent, logoutUser } from '../services/AuthService';
 import { setCheckInDuration, fetchMissedLogs } from '../services/SafetyService';
+import { registerForPushNotifications } from '../services/NotificationService';
 import HistoryMap from '../components/HistoryMap';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 
@@ -21,17 +22,23 @@ export default function GuardianHomeScreen() {
     const unsub = onSnapshot(doc(db, "users", guardianId), (docSnap) => {
       if (docSnap.exists()) setLinkedId(docSnap.data().linkedId);
     });
+    // Register push token for guardian alerts
+    registerForPushNotifications(guardianId).catch((err) => console.warn('Push registration failed', err));
     return () => unsub();
   }, []);
 
   useEffect(() => {
     if (!linkedId) return;
     const unsub = onSnapshot(doc(db, "users", linkedId), async (docSnap) => {
-      const data = docSnap.data();
-      setDependentData(data);
-      if (data?.status === 'sos' || (data?.nextCheckInDeadline && Date.now() > data.nextCheckInDeadline && data.status !== 'safe')) {
-        const logs = await fetchMissedLogs(linkedId);
-        setMissedLogs(logs);
+      try {
+        const data = docSnap.data();
+        setDependentData(data);
+        if (data?.status === 'sos' || (data?.nextCheckInDeadline && Date.now() > data.nextCheckInDeadline && data.status !== 'safe')) {
+          const logs = await fetchMissedLogs(linkedId);
+          setMissedLogs(logs);
+        }
+      } catch (e) {
+        console.warn('Dependent listener error', e);
       }
     });
     return () => unsub();

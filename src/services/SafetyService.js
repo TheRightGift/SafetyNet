@@ -13,6 +13,13 @@ import { sendPushNotification } from './NotificationService';
 export const setDestination = async (userId, coords, name) => {
   try {
     const userRef = doc(db, "users", userId);
+
+    // Allow clearing destination by passing null
+    if (!coords) {
+      await updateDoc(userRef, { destination: null });
+      return;
+    }
+
     await updateDoc(userRef, {
       destination: {
         latitude: coords.latitude,
@@ -53,18 +60,22 @@ export const checkArrival = async (currentCoords, userData) => {
 };
 
 export const triggerPanicMode = async (userId) => {
-  const userRef = doc(db, "users", userId);
-  const userSnap = await getDoc(userRef);
-  const userData = userSnap.data();
+  try {
+    const userRef = doc(db, "users", userId);
+    const userSnap = await getDoc(userRef);
+    const userData = userSnap.data();
 
-  const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-  await updateDoc(userRef, { status: "sos", panicTimestamp: serverTimestamp() });
-  await uploadLocationBreadcrumb(location.coords.latitude, location.coords.longitude, userId);
+    const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+    await updateDoc(userRef, { status: "sos", panicTimestamp: serverTimestamp() });
+    await uploadLocationBreadcrumb(location.coords.latitude, location.coords.longitude, userId);
 
-  if (userData.linkedId) {
-    const gSnap = await getDoc(doc(db, "users", userData.linkedId));
-    const token = gSnap.data()?.pushToken;
-    if (token) await sendPushNotification(token, "🚨 SOS ALERT", "Dependent triggered Panic Button!");
+    if (userData.linkedId) {
+      const gSnap = await getDoc(doc(db, "users", userData.linkedId));
+      const token = gSnap.data()?.pushToken;
+      if (token) await sendPushNotification(token, "🚨 SOS ALERT", "Dependent triggered Panic Button!");
+    }
+  } catch (error) {
+    console.error("Error in triggerPanicMode:", error);
   }
 };
 
@@ -72,7 +83,11 @@ export const sendSafePing = async (userId) => {
   const userRef = doc(db, "users", userId);
   const userSnap = await getDoc(userRef);
   const data = userSnap.data();
-  const nextDeadline = Date.now() + (data.checkInDuration || 1) * 3600000;
+
+  const hours = Number(data?.checkInDuration);
+  const durationHours = Number.isFinite(hours) && hours > 0 ? hours : 1;
+  const nextDeadline = Date.now() + durationHours * 3600000;
+
   await updateDoc(userRef, { status: "safe", nextCheckInDeadline: nextDeadline });
 };
 
